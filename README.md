@@ -70,5 +70,3 @@ bash tests/download_sample_ppt.sh
 - モデルや PPT ファイルは git 管理対象外（`.gitignore`）
 - SmartArt など python-pptx が直接扱えないオブジェクトは制約あり
 
-## Development Notes
-- Added E2E test workflow notes for local Ollama verification.
