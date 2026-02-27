@@ -1,0 +1,11 @@
+# runtime assets
+source/
+dest/
+models/
+*.pptx
+
+# python
+__pycache__/
+*.pyc
+.venv/
+.pytest_cache/
