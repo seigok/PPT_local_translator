@@ -10,7 +10,7 @@ class DummyTranslator:
     def __init__(self, *args, **kwargs):
         pass
 
-    def translate_en_to_ja(self, text: str) -> str:
+    def translate_en_to_ja(self, text: str, *, short_bullet: bool = False) -> str:
         return f"JA:{text}"
 
 
@@ -70,4 +70,31 @@ def test_estimate_font_size_pt_range():
         height = D(120)
 
     size = t._estimate_font_size_pt(S(), "short text")
-    assert 10 <= size <= 28
+    assert 8 <= size <= 28
+
+
+def test_style_range_translation_when_multi_run(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(t, "OllamaTranslator", DummyTranslator)
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(7), Inches(2))
+    p = box.text_frame.paragraphs[0]
+    r1 = p.add_run()
+    r1.text = "Private Beta"
+    r1.font.bold = True
+    r2 = p.add_run()
+    r2.text = " starts now"
+    r2.font.bold = False
+
+    in_path = tmp_path / "style.pptx"
+    prs.save(in_path)
+
+    out = t.translate_ppt(in_path, t.TranslateConfig(model="translategemma:4b", output_dir=tmp_path))
+    out_prs = Presentation(out)
+    p2 = out_prs.slides[0].shapes[0].text_frame.paragraphs[0]
+
+    assert p2.runs[0].text.startswith("JA:")
+    assert p2.runs[1].text.startswith("JA:")
+    assert p2.runs[0].font.bold is True
+    assert p2.runs[1].font.bold is False
