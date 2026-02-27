@@ -69,3 +69,4 @@ bash tests/download_sample_ppt.sh
 ## 注意
 - モデルや PPT ファイルは git 管理対象外（`.gitignore`）
 - SmartArt など python-pptx が直接扱えないオブジェクトは制約あり
+
