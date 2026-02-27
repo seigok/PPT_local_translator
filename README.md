@@ -34,9 +34,30 @@ python -m ppt_local_translator.cli \
 - Ollama が起動済みであること
 - 使うモデルを pull 済みであること（例: `ollama pull translategemma:4b`）
 
+
+## Ollama セットアップ（macOS）
+```bash
+brew install ollama
+brew services start ollama
+ollama pull translategemma:4b
+# 必要なら
+# ollama pull translategemma:12b
+```
+
+動作確認:
+```bash
+ollama --version
+ollama list
+```
+
 ## テスト
 ```bash
 pytest -q
+```
+
+E2E（実際にOllamaで翻訳）:
+```bash
+pytest -q -m e2e
 ```
 
 ### ネット由来サンプルPPT調達

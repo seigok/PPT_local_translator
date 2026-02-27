@@ -14,3 +14,9 @@ dependencies = [
 
 [tool.setuptools.packages.find]
 include = ["ppt_local_translator*"]
+
+
+[tool.pytest.ini_options]
+markers = [
+  "e2e: end-to-end tests requiring local services",
+]
