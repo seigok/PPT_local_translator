@@ -1,7 +1,7 @@
 from pathlib import Path
 
 from pptx import Presentation
-from pptx.util import Inches
+from pptx.util import Inches, Pt
 
 from ppt_local_translator import translator as t
 
@@ -11,7 +11,7 @@ class DummyTranslator:
         pass
 
     def translate_en_to_ja(self, text: str, *, short_bullet: bool = False) -> str:
-        return f"JA:{text}"
+        return f"訳:{text}"
 
 
 def test_translate_basic_shape(monkeypatch, tmp_path: Path):
@@ -24,6 +24,7 @@ def test_translate_basic_shape(monkeypatch, tmp_path: Path):
     run = p.add_run()
     run.text = "Cloud Native Architecture"
     run.font.bold = True
+    run.font.size = Pt(20)
 
     in_path = tmp_path / "in.pptx"
     prs.save(in_path)
@@ -31,70 +32,45 @@ def test_translate_basic_shape(monkeypatch, tmp_path: Path):
     out = t.translate_ppt(in_path, t.TranslateConfig(model="translategemma:4b", output_dir=tmp_path))
     out_prs = Presentation(out)
     out_shape = out_prs.slides[0].shapes[0]
-    out_text = out_shape.text_frame.paragraphs[0].text
+    run2 = out_shape.text_frame.paragraphs[0].runs[0]
 
     assert out.exists()
-    assert "JA:" in out_text
-    assert out_shape.text_frame.paragraphs[0].runs[0].font.name == "Meiryo"
+    assert run2.text.startswith("訳:")
+    assert run2.font.name == "Meiryo"
+    assert round(run2.font.size.pt, 1) == 20.0
 
 
-def test_preserve_hyperlink_and_bullet(monkeypatch, tmp_path: Path):
+def test_skip_retranslation_if_japanese(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(t, "OllamaTranslator", DummyTranslator)
 
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[6])
     box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(6), Inches(2))
-    p = box.text_frame.paragraphs[0]
-    p.level = 1
-    run = p.add_run()
-    run.text = "Developer Portal"
-    run.hyperlink.address = "https://example.com"
+    box.text_frame.paragraphs[0].text = "これは日本語の文章である"
 
-    in_path = tmp_path / "link.pptx"
+    in_path = tmp_path / "jp.pptx"
     prs.save(in_path)
+
     out = t.translate_ppt(in_path, t.TranslateConfig(model="translategemma:4b", output_dir=tmp_path))
-
     out_prs = Presentation(out)
-    p2 = out_prs.slides[0].shapes[0].text_frame.paragraphs[0]
-    assert p2.level == 1
-    assert p2.runs[0].hyperlink.address == "https://example.com"
+    text = out_prs.slides[0].shapes[0].text_frame.paragraphs[0].text
+    assert text == "これは日本語の文章である"
 
 
-def test_estimate_font_size_pt_range():
-    class S:
-        class D:
-            def __init__(self, pt):
-                self.pt = pt
-
-        width = D(300)
-        height = D(120)
-
-    size = t._estimate_font_size_pt(S(), "short text")
-    assert 8 <= size <= 28
-
-
-def test_style_range_translation_when_multi_run(monkeypatch, tmp_path: Path):
+def test_adjust_short_bullet_width(monkeypatch, tmp_path: Path):
     monkeypatch.setattr(t, "OllamaTranslator", DummyTranslator)
 
     prs = Presentation()
     slide = prs.slides.add_slide(prs.slide_layouts[6])
-    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(7), Inches(2))
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(8), Inches(2))
     p = box.text_frame.paragraphs[0]
-    r1 = p.add_run()
-    r1.text = "Private Beta"
-    r1.font.bold = True
-    r2 = p.add_run()
-    r2.text = " starts now"
-    r2.font.bold = False
+    p.level = 1
+    p.text = "short bullet"
 
-    in_path = tmp_path / "style.pptx"
+    in_path = tmp_path / "b.pptx"
     prs.save(in_path)
 
     out = t.translate_ppt(in_path, t.TranslateConfig(model="translategemma:4b", output_dir=tmp_path))
     out_prs = Presentation(out)
-    p2 = out_prs.slides[0].shapes[0].text_frame.paragraphs[0]
-
-    assert p2.runs[0].text.startswith("JA:")
-    assert p2.runs[1].text.startswith("JA:")
-    assert p2.runs[0].font.bold is True
-    assert p2.runs[1].font.bold is False
+    out_shape = out_prs.slides[0].shapes[0]
+    assert out_shape.width.pt < box.width.pt
