@@ -15,6 +15,7 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--output-dir", required=True, type=Path, help="destination folder")
     p.add_argument("--model", required=True, choices=MODELS)
     p.add_argument("--ollama-url", default="http://localhost:11434")
+    p.add_argument("--glossary", type=Path, default=Path("./glossary.json"), help="glossary json path")
     return p.parse_args()
 
 
@@ -28,6 +29,7 @@ def main() -> None:
             model=args.model,
             output_dir=args.output_dir,
             base_url=args.ollama_url,
+            glossary_path=args.glossary,
         ),
     )
     print(f"Translated file generated: {out}")
