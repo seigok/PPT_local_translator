@@ -75,6 +75,13 @@ E2E（実際にOllamaで翻訳）:
 pytest -q -m e2e
 ```
 
+## CI（GitHub Actions）
+- トリガー: `pull_request`（全ブランチ）/ `push`（main）
+- 実行内容: `ruff check .` + `pytest -q -m "not e2e"`
+- Python マトリクス: 3.9 / 3.10 / 3.11 / 3.12
+- 方針: `fail-fast: false`（他バージョン結果も収集）、`setup-python` の pip cache 有効
+- 補助: 失敗解析用に `.pytest_cache` を artifact として保存（7日）
+
 ### ネット由来サンプルPPT調達
 ```bash
 bash tests/download_sample_ppt.sh
