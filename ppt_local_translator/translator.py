@@ -32,28 +32,63 @@ def _is_probably_japanese(text: str) -> bool:
     return jp / max(1, len(text)) > 0.25
 
 
-def _set_font_preserve_size(run, fallback_pt: float = 18.0) -> None:
-    original_pt = run.font.size.pt if run.font.size else fallback_pt
+def _set_font_preserve_size(run) -> None:
+    # Keep original explicit run size as-is. If size is inherited(None), do not override.
+    original_size = run.font.size
     run.font.name = "Meiryo"
-    run.font.size = Pt(original_pt)
+    if original_size is not None:
+        run.font.size = original_size
 
 
-def _adjust_short_bullet_width(shape, paragraph, translated_text: str) -> None:
-    if paragraph.level <= 0:
+def _is_bullet_like(paragraph) -> bool:
+    text = (paragraph.text or "").strip()
+    return paragraph.level > 0 or text.startswith(("-", "•", "・"))
+
+
+def _shape_is_transparent_background(shape) -> bool:
+    try:
+        fill = getattr(shape, "fill", None)
+        if fill is None:
+            return True
+        return fill.type is None
+    except Exception:
+        return False
+
+
+def _estimate_line_width_pt(text: str, font_pt: float) -> float:
+    # rough heuristic for Japanese: full-width-ish average
+    return max(40.0, len(text.strip()) * font_pt * 1.05)
+
+
+def _adjust_textbox_width_for_short_lines(shape, paragraphs) -> None:
+    non_empty = [p for p in paragraphs if (p.text or "").strip()]
+    if not non_empty:
         return
-    if len(translated_text.strip()) > 25:
+
+    # apply when all non-empty lines are short bullet-like lines (<=30 chars)
+    if not all(_is_bullet_like(p) and len((p.text or "").strip()) <= 30 for p in non_empty):
         return
-    if not paragraph.runs:
-        return
-    font_pt = paragraph.runs[0].font.size.pt if paragraph.runs[0].font.size else 18.0
-    est_width_pt = max(60.0, len(translated_text.strip()) * font_pt * 1.1)
-    if shape.width.pt > est_width_pt:
-        shape.width = Pt(est_width_pt)
+
+    # if transparent rectangle/shape, always eligible; otherwise still allow for bullets
+    _ = _shape_is_transparent_background(shape)
+
+    # use longest line, not first line
+    longest = max(non_empty, key=lambda p: len((p.text or "").strip()))
+    first_run = longest.runs[0] if longest.runs else None
+    font_pt = first_run.font.size.pt if (first_run and first_run.font.size) else 18.0
+    target_width = _estimate_line_width_pt(longest.text or "", font_pt)
+
+    if shape.width.pt > target_width:
+        shape.width = Pt(target_width)
 
 
-def _translate_paragraph(paragraph, shape, translator: OllamaTranslator) -> None:
+def _translate_paragraph(paragraph, translator: OllamaTranslator) -> None:
     runs = list(paragraph.runs)
-    original = "".join(run.text for run in runs) or paragraph.text
+    original = "".join(run.text for run in runs) if runs else (paragraph.text or "")
+
+    # keep explicit blank line as-is (do not collapse)
+    if original == "":
+        return
     if not original.strip():
         return
 
@@ -63,24 +98,32 @@ def _translate_paragraph(paragraph, shape, translator: OllamaTranslator) -> None
             _set_font_preserve_size(run)
         return
 
-    short_bullet = paragraph.level > 0 and len(original.strip()) <= 25
-    translated = translator.translate_en_to_ja(original, short_bullet=short_bullet)
+    short_bullet = _is_bullet_like(paragraph) and len(original.strip()) <= 30
 
+    # Preserve mid-sentence color/style by translating per-run when multiple runs exist.
+    if len(runs) > 1:
+        for run in runs:
+            if not run.text.strip() or _is_probably_japanese(run.text):
+                _set_font_preserve_size(run)
+                continue
+            run.text = translator.translate_en_to_ja(run.text, short_bullet=short_bullet)
+            _set_font_preserve_size(run)
+        return
+
+    translated = translator.translate_en_to_ja(original, short_bullet=short_bullet)
     if runs:
         runs[0].text = translated
-        for run in runs[1:]:
-            run.text = ""
-        _set_font_preserve_size(runs[0], runs[0].font.size.pt if runs[0].font.size else 18.0)
+        _set_font_preserve_size(runs[0])
     else:
         paragraph.text = translated
-
-    _adjust_short_bullet_width(shape, paragraph, translated)
 
 
 def _translate_text_frame(shape, translator: OllamaTranslator) -> None:
     tf = shape.text_frame
-    for paragraph in tf.paragraphs:
-        _translate_paragraph(paragraph, shape, translator)
+    paragraphs = list(tf.paragraphs)
+    for paragraph in paragraphs:
+        _translate_paragraph(paragraph, translator)
+    _adjust_textbox_width_for_short_lines(shape, paragraphs)
 
 
 def _translate_table(shape, translator: OllamaTranslator) -> None:
@@ -88,19 +131,15 @@ def _translate_table(shape, translator: OllamaTranslator) -> None:
     for row in table.rows:
         for cell in row.cells:
             for paragraph in cell.text_frame.paragraphs:
-                original = "".join(run.text for run in paragraph.runs) or paragraph.text
-                if not original.strip() or _is_probably_japanese(original):
-                    for run in paragraph.runs:
-                        _set_font_preserve_size(run)
-                    continue
-                translated = translator.translate_en_to_ja(original, short_bullet=(paragraph.level > 0 and len(original.strip()) <= 25))
-                if paragraph.runs:
-                    paragraph.runs[0].text = translated
-                    for run in paragraph.runs[1:]:
-                        run.text = ""
-                    _set_font_preserve_size(paragraph.runs[0])
-                else:
-                    paragraph.text = translated
+                _translate_paragraph(paragraph, translator)
+
+
+def _translate_slide_notes(slide, translator: OllamaTranslator) -> None:
+    if not slide.has_notes_slide:
+        return
+    notes_tf = slide.notes_slide.notes_text_frame
+    for paragraph in notes_tf.paragraphs:
+        _translate_paragraph(paragraph, translator)
 
 
 def translate_ppt(input_path: Path, config: TranslateConfig) -> Path:
@@ -113,6 +152,7 @@ def translate_ppt(input_path: Path, config: TranslateConfig) -> Path:
                 _translate_text_frame(shape, translator)
             if getattr(shape, "has_table", False) and shape.has_table:
                 _translate_table(shape, translator)
+        _translate_slide_notes(slide, translator)
 
     config.output_dir.mkdir(parents=True, exist_ok=True)
     out_path = config.output_dir / f"{input_path.stem}_ja.pptx"

@@ -74,3 +74,67 @@ def test_adjust_short_bullet_width(monkeypatch, tmp_path: Path):
     out_prs = Presentation(out)
     out_shape = out_prs.slides[0].shapes[0]
     assert out_shape.width.pt < box.width.pt
+
+
+def test_multi_line_bullets_use_longest_line_for_width(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(t, "OllamaTranslator", DummyTranslator)
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(10), Inches(3))
+    tf = box.text_frame
+    p1 = tf.paragraphs[0]
+    p1.level = 1
+    p1.text = "short"
+    p2 = tf.add_paragraph()
+    p2.level = 1
+    p2.text = "this is longest bullet line"
+    p3 = tf.add_paragraph()
+    p3.level = 1
+    p3.text = "mid"
+
+    in_path = tmp_path / "ml.pptx"
+    prs.save(in_path)
+
+    out = t.translate_ppt(in_path, t.TranslateConfig(model="translategemma:4b", output_dir=tmp_path))
+    out_prs = Presentation(out)
+    out_shape = out_prs.slides[0].shapes[0]
+    assert out_shape.width.pt < box.width.pt
+
+
+def test_translate_slide_notes(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(t, "OllamaTranslator", DummyTranslator)
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    notes = slide.notes_slide.notes_text_frame
+    notes.paragraphs[0].text = "Release notes in English"
+
+    in_path = tmp_path / "notes.pptx"
+    prs.save(in_path)
+
+    out = t.translate_ppt(in_path, t.TranslateConfig(model="translategemma:4b", output_dir=tmp_path))
+    out_prs = Presentation(out)
+    text = out_prs.slides[0].notes_slide.notes_text_frame.paragraphs[0].text
+    assert text.startswith("訳:")
+
+
+def test_keep_blank_middle_line(monkeypatch, tmp_path: Path):
+    monkeypatch.setattr(t, "OllamaTranslator", DummyTranslator)
+
+    prs = Presentation()
+    slide = prs.slides.add_slide(prs.slide_layouts[6])
+    box = slide.shapes.add_textbox(Inches(1), Inches(1), Inches(8), Inches(3))
+    tf = box.text_frame
+    tf.paragraphs[0].text = "Line one"
+    tf.add_paragraph().text = ""
+    tf.add_paragraph().text = "Line three"
+
+    in_path = tmp_path / "blankline.pptx"
+    prs.save(in_path)
+
+    out = t.translate_ppt(in_path, t.TranslateConfig(model="translategemma:4b", output_dir=tmp_path))
+    out_prs = Presentation(out)
+    ps = out_prs.slides[0].shapes[0].text_frame.paragraphs
+    assert len(ps) >= 3
+    assert ps[1].text == ""
