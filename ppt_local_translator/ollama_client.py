@@ -49,7 +49,7 @@ class OllamaTranslator:
             "Avoid literal translation; prefer concise, context-aware phrasing Japanese users prefer. "
             "Preserve leading indentation spaces/tabs and keep meaningful line breaks at semantic boundaries. "
             f"{short_sentence_rule}\n\n"
-            "Do-not-translate glossary:\n"
+            "Do-not-translate glossary (keep exactly as-is):\n"
             f"{glossary_block}\n\n"
             "Return ONLY translated text.\n\n"
             f"TEXT:\n{text}"
@@ -57,33 +57,28 @@ class OllamaTranslator:
 
 
     def _sanitize_translation(self, source_text: str, translated: str) -> str:
-        """Remove known hallucinated glossary bullets and prompt-echo artifacts."""
+        """Generic cleanup for prompt-echo artifacts while preserving valid content."""
         out = translated.replace("```", "").strip("\n")
 
-        # If source has no explicit '-' bullets, drop standalone injected bullet lines.
-        source_has_dash = "-" in source_text
+        source_lines = [ln.strip() for ln in source_text.splitlines() if ln.strip()]
+        source_has_bullets = any(ln.startswith("-") for ln in source_lines)
 
-        artifact_lines = {
-            "- インフラ",
-            "- プライベートベータ",
-            "- パブリックベータ",
-            "-",
-        }
+        lines = out.splitlines()
 
-        cleaned_lines = []
-        for line in out.splitlines():
-            normalized = line.strip()
-            if not source_has_dash and normalized in artifact_lines:
-                continue
-            # Also remove optional leading-space variants like " - プライベートベータ"
-            if not source_has_dash and normalized.startswith("-") and normalized[1:].strip() in {"インフラ", "プライベートベータ", "パブリックベータ"}:
-                continue
-            cleaned_lines.append(line)
+        # If source has no explicit bullet lines, remove a leading contiguous bullet block
+        # often produced by prompt echo/hallucination.
+        if not source_has_bullets:
+            i = 0
+            while i < len(lines) and lines[i].strip().startswith("-"):
+                i += 1
+            # Remove only if there are 2+ leading bullet lines (strong artifact signal).
+            if i >= 2:
+                lines = lines[i:]
 
         # collapse excessive empty lines
         collapsed = []
         prev_empty = False
-        for line in cleaned_lines:
+        for line in lines:
             empty = (line.strip() == "")
             if empty and prev_empty:
                 continue
