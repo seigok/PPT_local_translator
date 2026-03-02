@@ -28,6 +28,30 @@ class OllamaTranslator:
             f"TEXT:\n{text}"
         )
 
+
+    def _mask_urls(self, text: str):
+        # Preserve URLs/slack-style links from translation.
+        patterns = [
+            r"<https?://[^>]+>",
+            r"https?://[^\s)\]}>]+",
+        ]
+        combined = re.compile("|".join(f"({p})" for p in patterns))
+        tokens = []
+
+        def repl(m):
+            token = f"__URLTOKEN_{len(tokens)}__"
+            tokens.append(m.group(0))
+            return token
+
+        masked = combined.sub(repl, text)
+        return masked, tokens
+
+    def _unmask_urls(self, text: str, tokens):
+        out = text
+        for i, v in enumerate(tokens):
+            out = out.replace(f"__URLTOKEN_{i}__", v)
+        return out
+
     def _sanitize_translation(self, source_text: str, translated: str) -> str:
         out = translated.replace("```", "").replace("**", "").strip("\n")
 
@@ -60,12 +84,14 @@ class OllamaTranslator:
         if not core.strip():
             return text
 
+        masked_core, url_tokens = self._mask_urls(core)
+
         try:
             resp = requests.post(
                 f"{self.base_url}/api/generate",
                 json={
                     "model": self.model,
-                    "prompt": self._build_prompt(core, short_bullet=short_bullet),
+                    "prompt": self._build_prompt(masked_core, short_bullet=short_bullet),
                     "stream": False,
                     "options": {"temperature": 0.2},
                 },
@@ -77,6 +103,7 @@ class OllamaTranslator:
             if not translated:
                 return text
             translated = self._sanitize_translation(core, translated)
+            translated = self._unmask_urls(translated, url_tokens)
             return f"{leading}{translated}{trailing}" if translated else text
         except Exception:
             return text
