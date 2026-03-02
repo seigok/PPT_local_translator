@@ -16,7 +16,6 @@ class TranslateConfig:
     model: str
     output_dir: Path
     base_url: str = "http://localhost:11434"
-    glossary_path: Path | None = None
 
 
 def _iter_shapes_recursive(shapes) -> Iterable:
@@ -26,73 +25,62 @@ def _iter_shapes_recursive(shapes) -> Iterable:
             yield from _iter_shapes_recursive(shape.shapes)
 
 
-def _estimate_font_size_pt(shape, text: str, min_pt: int = 8, max_pt: int = 28) -> int:
+def _is_probably_japanese(text: str) -> bool:
     if not text.strip():
-        return min_pt
-    width_pt = max(1, shape.width.pt)
-    height_pt = max(1, shape.height.pt)
-    char_count = max(1, len(text.replace("\n", "")))
-    line_count = max(1, text.count("\n") + 1)
-
-    est_by_width = width_pt / (0.58 * (char_count / line_count + 2))
-    est_by_height = height_pt / (1.5 * line_count)
-    est = int(max(min_pt, min(max_pt, min(est_by_width, est_by_height))))
-    return est
+        return True
+    jp = sum(1 for ch in text if ("\u3040" <= ch <= "\u30ff") or ("\u4e00" <= ch <= "\u9fff"))
+    return jp / max(1, len(text)) > 0.25
 
 
-def _translate_paragraph_with_style_awareness(paragraph, translator: OllamaTranslator) -> str:
+def _set_font_preserve_size(run, fallback_pt: float = 18.0) -> None:
+    original_pt = run.font.size.pt if run.font.size else fallback_pt
+    run.font.name = "Meiryo"
+    run.font.size = Pt(original_pt)
+
+
+def _adjust_short_bullet_width(shape, paragraph, translated_text: str) -> None:
+    if paragraph.level <= 0:
+        return
+    if len(translated_text.strip()) > 25:
+        return
+    if not paragraph.runs:
+        return
+    font_pt = paragraph.runs[0].font.size.pt if paragraph.runs[0].font.size else 18.0
+    est_width_pt = max(60.0, len(translated_text.strip()) * font_pt * 1.1)
+    if shape.width.pt > est_width_pt:
+        shape.width = Pt(est_width_pt)
+
+
+def _translate_paragraph(paragraph, shape, translator: OllamaTranslator) -> None:
     runs = list(paragraph.runs)
     original = "".join(run.text for run in runs) or paragraph.text
     if not original.strip():
-        return original
-
-    # Full-context translation.
-    short_bullet = paragraph.level > 0 and len(original.strip()) <= 24
-    full_translated = translator.translate_en_to_ja(original, short_bullet=short_bullet)
-
-    # If styled runs are present, also do run-level translation to preserve style ranges.
-    has_multi_style = len(runs) > 1 and len({(r.font.bold, r.font.italic, r.font.underline, getattr(r.font.color, "rgb", None)) for r in runs}) > 1
-    if has_multi_style:
-        for run in runs:
-            run.text = translator.translate_en_to_ja(run.text, short_bullet=short_bullet)
-        return "".join(r.text for r in runs)
-
-    # No meaningful style boundaries: keep full-context result.
-    if runs:
-        runs[0].text = full_translated
-        for run in runs[1:]:
-            run.text = ""
-    else:
-        paragraph.text = full_translated
-    return full_translated
-
-
-def _apply_font_policy(paragraph, shape, translated_text: str) -> None:
-    runs = list(paragraph.runs)
-    if not runs:
         return
 
-    orig_sizes = []
-    for run in runs:
-        pt = run.font.size.pt if run.font.size else None
-        if pt is not None:
-            orig_sizes.append(float(pt))
+    # Repeat-translation guard
+    if _is_probably_japanese(original):
+        for run in runs:
+            _set_font_preserve_size(run)
+        return
 
-    max_orig = max(orig_sizes) if orig_sizes else 18.0
-    target_max = _estimate_font_size_pt(shape, translated_text, min_pt=8, max_pt=int(max(10, max_orig)))
-    scale = min(1.0, target_max / max_orig) if max_orig > 0 else 1.0
+    short_bullet = paragraph.level > 0 and len(original.strip()) <= 25
+    translated = translator.translate_en_to_ja(original, short_bullet=short_bullet)
 
-    for run in runs:
-        run.font.name = "Meiryo"
-        base = run.font.size.pt if run.font.size else max_orig
-        run.font.size = Pt(max(8, round(base * scale, 1)))
+    if runs:
+        runs[0].text = translated
+        for run in runs[1:]:
+            run.text = ""
+        _set_font_preserve_size(runs[0], runs[0].font.size.pt if runs[0].font.size else 18.0)
+    else:
+        paragraph.text = translated
+
+    _adjust_short_bullet_width(shape, paragraph, translated)
 
 
 def _translate_text_frame(shape, translator: OllamaTranslator) -> None:
     tf = shape.text_frame
     for paragraph in tf.paragraphs:
-        translated_text = _translate_paragraph_with_style_awareness(paragraph, translator)
-        _apply_font_policy(paragraph, shape, translated_text)
+        _translate_paragraph(paragraph, shape, translator)
 
 
 def _translate_table(shape, translator: OllamaTranslator) -> None:
@@ -100,22 +88,24 @@ def _translate_table(shape, translator: OllamaTranslator) -> None:
     for row in table.rows:
         for cell in row.cells:
             for paragraph in cell.text_frame.paragraphs:
-                translated_text = _translate_paragraph_with_style_awareness(paragraph, translator)
-                for run in paragraph.runs:
-                    run.font.name = "Meiryo"
-                    if run.font.size:
-                        run.font.size = Pt(max(8, run.font.size.pt))
-                if not paragraph.runs:
-                    paragraph.text = translated_text
+                original = "".join(run.text for run in paragraph.runs) or paragraph.text
+                if not original.strip() or _is_probably_japanese(original):
+                    for run in paragraph.runs:
+                        _set_font_preserve_size(run)
+                    continue
+                translated = translator.translate_en_to_ja(original, short_bullet=(paragraph.level > 0 and len(original.strip()) <= 25))
+                if paragraph.runs:
+                    paragraph.runs[0].text = translated
+                    for run in paragraph.runs[1:]:
+                        run.text = ""
+                    _set_font_preserve_size(paragraph.runs[0])
+                else:
+                    paragraph.text = translated
 
 
 def translate_ppt(input_path: Path, config: TranslateConfig) -> Path:
     prs = Presentation(str(input_path))
-    translator = OllamaTranslator(
-        model=config.model,
-        base_url=config.base_url,
-        glossary_path=config.glossary_path,
-    )
+    translator = OllamaTranslator(model=config.model, base_url=config.base_url)
 
     for slide in prs.slides:
         for shape in _iter_shapes_recursive(slide.shapes):

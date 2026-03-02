@@ -25,8 +25,7 @@ pip install -r requirements.txt
 python -m ppt_local_translator.cli \
   --input ./source/input.pptx \
   --output-dir ./dest \
-  --model translategemma:4b \
-  --glossary ./glossary.json
+  --model translategemma:4b
 ```
 
 実行後、`dest/<元ファイル名>_ja.pptx` を生成します。
@@ -51,19 +50,6 @@ ollama --version
 ollama list
 ```
 
-
-## Glossary (Do-not-translate terms)
-`glossary.json` can accumulate terms that must remain in English.
-
-```json
-{
-  "do_not_translate": [
-    "Infrastructure",
-    "Private Beta",
-    "Public Beta"
-  ]
-}
-```
 
 ## テスト
 ```bash
