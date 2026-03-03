@@ -39,7 +39,8 @@ class OllamaTranslator:
         tokens = []
 
         def repl(m):
-            token = f"__URLTOKEN_{len(tokens)}__"
+            # Use a machine-ish token less likely to be naturally translated.
+            token = f"<<<URLTOKEN_{len(tokens)}>>>"
             tokens.append(m.group(0))
             return token
 
@@ -49,7 +50,18 @@ class OllamaTranslator:
     def _unmask_urls(self, text: str, tokens):
         out = text
         for i, v in enumerate(tokens):
-            out = out.replace(f"__URLTOKEN_{i}__", v)
+            # Exact placeholder first.
+            out = out.replace(f"<<<URLTOKEN_{i}>>>", v)
+
+            # Tolerate LLM-normalized variants (e.g. "URLトークン0", "URL token 0").
+            tolerant = [
+                re.compile(rf"URL\s*TOKEN\s*_?\s*{i}", re.IGNORECASE),
+                re.compile(rf"URL\s*トークン\s*{i}"),
+                re.compile(rf"ＵＲＬ\s*トークン\s*{i}"),
+                re.compile(rf"URLトークン\s*{i}"),
+            ]
+            for pat in tolerant:
+                out = pat.sub(v, out)
         return out
 
     def _sanitize_translation(self, source_text: str, translated: str) -> str:
