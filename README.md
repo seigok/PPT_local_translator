@@ -51,6 +51,21 @@ ollama list
 ```
 
 
+
+## 用語グローサリー（翻訳しない英語名詞）
+- `config/local_glossary` に **1行1用語** で登録すると、その語は翻訳前にプレースホルダへ置換し、翻訳後に英語へ復元します。
+- 復元できない（プレースホルダ欠落）場合はエラーとして検知し、誤変換のまま進めません。
+- 最長一致・単語境界でマッチするため、短い語の部分一致による誤検知を抑えます。
+
+初期テンプレート: `config/glossary.sample`
+
+```bash
+cp config/glossary.sample config/local_glossary
+# 必要な名詞を追記
+```
+
+`config/local_glossary` は `.gitignore` 済みで、ユーザーごとの差分をコミットしない運用です。
+
 ## テスト
 ```bash
 pytest -q
