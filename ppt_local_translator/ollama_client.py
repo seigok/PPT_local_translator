@@ -1,14 +1,25 @@
 from __future__ import annotations
 
 import re
+from pathlib import Path
 
 import requests
 
 
+_WORD_BOUNDARY = r"[A-Za-z0-9_]"
+_GLOSSARY_TOKEN_FMT = "⟪GLS_{:04d}⟫"
+
+
 class OllamaTranslator:
-    def __init__(self, model: str, base_url: str = "http://localhost:11434") -> None:
+    def __init__(
+        self,
+        model: str,
+        base_url: str = "http://localhost:11434",
+        glossary_path: Path | None = None,
+    ) -> None:
         self.model = model
         self.base_url = base_url.rstrip("/")
+        self.glossary_path = glossary_path or Path("config/local_glossary")
 
     def _build_prompt(self, text: str, *, short_bullet: bool = False) -> str:
         short_sentence_rule = (
@@ -28,9 +39,61 @@ class OllamaTranslator:
             f"TEXT:\n{text}"
         )
 
+    def _load_glossary_terms(self) -> list[str]:
+        path = self.glossary_path
+        if not path.exists():
+            return []
+        terms: list[str] = []
+        for line in path.read_text(encoding="utf-8").splitlines():
+            s = line.strip()
+            if not s or s.startswith("#"):
+                continue
+            terms.append(s)
+        # deterministic: dedupe while preserving order, then longest-first
+        seen: set[str] = set()
+        ordered = [t for t in terms if not (t in seen or seen.add(t))]
+        ordered.sort(key=lambda x: (-len(x), x))
+        return ordered
+
+    def _mask_glossary_terms(self, text: str):
+        terms = self._load_glossary_terms()
+        if not terms:
+            return text, []
+
+        masked = text
+        tokens: list[str] = []
+
+        for term in terms:
+            pattern = re.compile(
+                rf"(?<!{_WORD_BOUNDARY})({re.escape(term)})(?!{_WORD_BOUNDARY})"
+            )
+
+            def repl(_m):
+                token = _GLOSSARY_TOKEN_FMT.format(len(tokens))
+                tokens.append(term)
+                return token
+
+            masked = pattern.sub(repl, masked)
+
+        return masked, tokens
+
+    def _unmask_glossary_terms(self, text: str, tokens: list[str]) -> str:
+        out = text
+        missing: list[str] = []
+
+        for i, term in enumerate(tokens):
+            token = _GLOSSARY_TOKEN_FMT.format(i)
+            if token not in out:
+                missing.append(token)
+            out = out.replace(token, term)
+
+        if missing:
+            raise ValueError(
+                "Glossary placeholder missing after translation: " + ", ".join(missing)
+            )
+        return out
 
     def _mask_urls(self, text: str):
-        # Preserve URLs/slack-style links from translation.
         patterns = [
             r"<https?://[^>]+>",
             r"https?://[^\s)\]}>]+",
@@ -39,7 +102,6 @@ class OllamaTranslator:
         tokens = []
 
         def repl(m):
-            # Use a machine-ish token less likely to be naturally translated.
             token = f"<<<URLTOKEN_{len(tokens)}>>>"
             tokens.append(m.group(0))
             return token
@@ -50,10 +112,8 @@ class OllamaTranslator:
     def _unmask_urls(self, text: str, tokens):
         out = text
         for i, v in enumerate(tokens):
-            # Exact placeholder first.
             out = out.replace(f"<<<URLTOKEN_{i}>>>", v)
 
-            # Tolerate LLM-normalized variants (e.g. "URLトークン0", "URL token 0").
             tolerant = [
                 re.compile(rf"URL\s*TOKEN\s*_?\s*{i}", re.IGNORECASE),
                 re.compile(rf"URL\s*トークン\s*{i}"),
@@ -67,11 +127,9 @@ class OllamaTranslator:
     def _sanitize_translation(self, source_text: str, translated: str) -> str:
         out = translated.replace("```", "").replace("**", "").strip("\n")
 
-        # Do not insert new line breaks if source had none.
         if "\n" not in source_text:
             out = out.replace("\n", " ")
 
-        # If source has N lines, cap output lines to N by joining extras.
         src_lines = source_text.count("\n") + 1
         parts = out.splitlines()
         if len(parts) > src_lines:
@@ -79,7 +137,6 @@ class OllamaTranslator:
             tail = " ".join(p.strip() for p in parts[src_lines - 1 :] if p.strip())
             out = "\n".join(head + [tail]) if head else tail
 
-        # collapse excessive spaces
         out = re.sub(r"[ \t]{2,}", " ", out)
         return out.strip("\n")
 
@@ -97,6 +154,7 @@ class OllamaTranslator:
             return text
 
         masked_core, url_tokens = self._mask_urls(core)
+        masked_core, glossary_tokens = self._mask_glossary_terms(masked_core)
 
         try:
             resp = requests.post(
@@ -116,6 +174,9 @@ class OllamaTranslator:
                 return text
             translated = self._sanitize_translation(core, translated)
             translated = self._unmask_urls(translated, url_tokens)
+            translated = self._unmask_glossary_terms(translated, glossary_tokens)
             return f"{leading}{translated}{trailing}" if translated else text
+        except ValueError:
+            raise
         except Exception:
             return text

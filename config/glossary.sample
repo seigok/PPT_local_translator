@@ -1,0 +1,7 @@
+# One term per line. Nouns / proper nouns recommended.
+# These terms will be preserved in English by placeholder masking.
+Cloud Native
+Kubernetes
+Amazon EC2
+S3
+GitHub Actions
